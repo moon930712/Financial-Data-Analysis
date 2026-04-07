@@ -20,7 +20,7 @@ load_env('../.env')  # src/ 내부에 있으므로 상위 디렉토리 참조
 load_env('.env')     # 혹은 루트에서 실행될 경우
 
 NOTION_TOKEN = os.environ.get('NOTION_API_KEY')
-PAGE_ID = "320802bfab6b434a9f4ea8cfe48eaa0a"
+PAGE_ID = "33b99b3125fc803c8482d822844f9a81"
 
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
