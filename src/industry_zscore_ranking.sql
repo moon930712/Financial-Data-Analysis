@@ -2,6 +2,7 @@
 -- 퀀트 스크리닝 및 업종별 다중 요인(Multi-Factor) Z-Score 통합 랭킹 모델
 -- 작성 목적: Python Pandas 의존성 없이 PostgreSQL Native Query 만으로 
 --            종목 단위의 과거 3년 시계열 처리 및 업종 Z-Score를 산출하는 파이프라인
+-- (참고: 기초 업종분류는 visual.vsl_anly_stocks_price_subindex01 사용)
 -- =====================================================================
 WITH latest_date AS (
     -- 1. 가장 최근 영업일 추출
@@ -25,12 +26,18 @@ current_stats AS (
     FROM company.krx_stocks_fundamental_info
     WHERE date = (SELECT max_d FROM latest_date)
 ),
+market_info AS (
+    -- 4. 비주얼라이징 데일리 팩터 테이블에서 최신 기준의 종목명 및 WICS 분류 추출
+    SELECT DISTINCT stock_code, stock_name, wics_name
+    FROM visual.vsl_anly_stocks_price_subindex01
+    WHERE date = (SELECT MAX(date) FROM visual.vsl_anly_stocks_price_subindex01)
+),
 combined_stock_data AS (
-    -- 4. 종목별 기초 통계 및 펀더멘탈 결합 (PBR_Discount 및 근사 ROE 도출)
+    -- 5. 종목별 기초 통계 및 펀더멘탈 결합 (PBR_Discount 및 근사 ROE 도출)
     SELECT 
         m.stock_code,
         m.stock_name,
-        COALESCE(m.wics_name1, '기타') AS industry,
+        COALESCE(m.wics_name, '기타') AS industry,
         -- ROE 역산: PBR = PER * ROE => ROE = PBR / PER
         -- 적자 기업이거나 PER 계산이 불가한 경우 패널티(-5.0) 부여
         CASE 
@@ -39,47 +46,45 @@ combined_stock_data AS (
             ELSE -5.0 
         END AS roe,
         -- PBR 할인율 (Value): (Current PBR) / (3yr Avg PBR) 
-        -- NULL 방어 및 0인 경우 방어
         CASE 
             WHEN h.avg_pbr_3yr > 0 THEN c.pbr / h.avg_pbr_3yr
             ELSE NULL 
         END AS pbr_discount_ratio,
-        -- 저평가 여부 플래그 플래그 지정 (현재 PBR <= 3년 평균의 90% & 현재 PBR < 1.5)
+        -- 저평가 여부 플래그 지정 (현재 PBR <= 3년 평균의 90% & 현재 PBR < 1.5)
         CASE 
             WHEN c.pbr <= (h.avg_pbr_3yr * 0.9) AND c.pbr < 1.5 THEN 1.0
             ELSE 0.0 
         END AS is_undervalued
-    FROM company.master_company_list m
+    FROM market_info m
     JOIN current_stats c ON m.stock_code = c.code
     JOIN historical_stats h ON m.stock_code = h.code
-    WHERE m.wics_name1 IS NOT NULL
+    WHERE m.wics_name IS NOT NULL
 ),
 industry_aggregation AS (
-    -- 5. 업종(Industry)별 팩터(Factor) 집계
+    -- 6. 업종(Industry)별 팩터 집계
     SELECT 
         industry,
         COUNT(stock_code) AS stock_count,
-        AVG(roe) AS avg_roe,                                 -- Factor 1: Fundamental (기본 체력)
-        AVG(pbr_discount_ratio) AS avg_pbr_discount,         -- Factor 2: Value (바닥론, 낮을수록 좋음)
+        AVG(roe) AS avg_roe,                                 -- Factor 1: Fundamental
+        AVG(pbr_discount_ratio) AS avg_pbr_discount,         -- Factor 2: Value
         SUM(is_undervalued) AS undervalued_count
     FROM combined_stock_data
     GROUP BY industry
-    HAVING COUNT(stock_code) >= 5  -- 너무 적은 종목 수를 보유한 테마성 업종은 제외
+    HAVING COUNT(stock_code) >= 5  -- 테마성 소규모 업종 제외
 ),
 industry_metrics AS (
-    -- 6. 집계된 업종 데이터를 기반으로 밀집도(Density) 계산
+    -- 7. 집계된 데이터를 기반으로 밀집도(Density) 계산
     SELECT 
         industry,
         stock_count,
         avg_roe,
         avg_pbr_discount,
         undervalued_count,
-        (undervalued_count / stock_count::numeric) * 100 AS undervalue_density -- Factor 3: Quality (밀집도)
+        (undervalued_count / stock_count::numeric) * 100 AS undervalue_density -- Factor 3: Quality
     FROM industry_aggregation
 ),
 zscore_calculation AS (
-    -- 7. 윈도우 함수(Window Function)를 이용한 Z-Score 산출
-    -- Z = (X - Average) / Standard_Deviation
+    -- 8. 윈도우 함수(Window Function)를 이용한 Z-Score 산출
     SELECT 
         industry,
         stock_count,
@@ -88,12 +93,12 @@ zscore_calculation AS (
         avg_roe,
         -- Z-Score 계산
         COALESCE((avg_roe - AVG(avg_roe) OVER()) / NULLIF(STDDEV_POP(avg_roe) OVER(), 0), 0) AS z_fundamental,
-        -- PBR 할인율은 값이 낮을수록 좋은 지표이므로 음수화(-1 을 곱합)
+        -- PBR 할인율은 역수 처리 음수화(-1)
         COALESCE(((avg_pbr_discount - AVG(avg_pbr_discount) OVER()) / NULLIF(STDDEV_POP(avg_pbr_discount) OVER(), 0)) * -1, 0) AS z_value,
         COALESCE((undervalue_density - AVG(undervalue_density) OVER()) / NULLIF(STDDEV_POP(undervalue_density) OVER(), 0), 0) AS z_density
     FROM industry_metrics
 )
--- 8. 최종 통합 점수 산출 및 랭킹 정렬
+-- 9. 최종 종순위 산출 및 랭킹 정렬
 SELECT 
     ROW_NUMBER() OVER(ORDER BY ((z_density * 0.4) + (z_value * 0.3) + (z_fundamental * 0.3)) DESC) AS "종합 순위(Rank)",
     industry AS "섹터명(WICS)",
