@@ -119,9 +119,12 @@ try:
     final_ranking = industry_df.sort_values(by='total_z_score', ascending=False).reset_index(drop=True)
     final_ranking.index = final_ranking.index + 1
     
+    # 맨 앞에 명시적인 순위(Rank) 컬럼 삽입
+    final_ranking.insert(0, 'rank', final_ranking.index)
+    
     print("\n최종 업종 랭킹 (Total Z-Score 기준 상위 10개 업종):")
     # 포맷팅하여 이쁘게 출력
-    display_cols = ['industry', 'total_z_score', 'z_density', 'z_value', 'z_fundamental', 'stock_count', 'undervalue_density']
+    display_cols = ['rank', 'industry', 'total_z_score', 'z_density', 'z_value', 'z_fundamental', 'stock_count', 'undervalue_density']
     pd.set_option('display.float_format', '{:.2f}'.format)
     print(final_ranking[display_cols].head(10))
 

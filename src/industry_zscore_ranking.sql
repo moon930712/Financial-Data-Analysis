@@ -95,6 +95,7 @@ zscore_calculation AS (
 )
 -- 8. 최종 통합 점수 산출 및 랭킹 정렬
 SELECT 
+    ROW_NUMBER() OVER(ORDER BY ((z_density * 0.4) + (z_value * 0.3) + (z_fundamental * 0.3)) DESC) AS "종합 순위(Rank)",
     industry AS "섹터명(WICS)",
     ROUND(((z_density * 0.4) + (z_value * 0.3) + (z_fundamental * 0.3))::numeric, 2) AS "통합 Z-Score (Total Score)",
     ROUND(z_density::numeric, 2) AS "Z-Score (저평가 밀집도)",
