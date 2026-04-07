@@ -19,7 +19,7 @@ load_env('.env')
 
 NOTION_TOKEN = os.environ.get('NOTION_API_KEY')
 # 달력 형태의 데이터베이스 ID를 이곳에 적습니다! (기존 Page ID와 다름)
-DATABASE_ID = "YOUR_DATABASE_ID_HERE"
+DATABASE_ID = "33b99b3125fc80fd85c8ca28ddfe233c"
 
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
