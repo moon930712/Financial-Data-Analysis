@@ -1,0 +1,60 @@
+WITH base AS (
+    SELECT
+        a.date,
+        a.stock_code,
+        a.stock_name,
+        a.close
+    FROM company.kis_closing_price_sale3 a
+    INNER JOIN (
+        SELECT stock_code, stck_bsop_date
+        FROM (
+            SELECT
+                stock_code,
+                stck_bsop_date,
+                close,
+                ma_100,
+                lag(close, 1) OVER(PARTITION BY stock_code, stck_bsop_date ORDER BY stck_cntg_hour) AS lag_close,
+                lag(ma_100, 1) OVER(PARTITION BY stock_code, stck_bsop_date ORDER BY stck_cntg_hour) AS lag_ma100,
+                row_number() OVER(PARTITION BY stock_code, stck_bsop_date ORDER BY stck_cntg_hour DESC) AS rn
+            FROM company.kis_15min_candles
+            -- ★ 특정 날짜 고정 필터 제거하여 전체 기간 대상으로 확장
+        ) tmp
+        WHERE rn = 1
+          AND ((lag_close < lag_ma100 AND ma_100 < close) OR ma_100 < close)
+    ) md ON a.stock_code = md.stock_code AND a.date = to_date(md.stck_bsop_date, 'yyyyMMdd')
+    -- ★ WHERE a.date = '2026-03-12' -- 기존 고정 필터 제거
+),
+lead_df AS (
+    SELECT
+        date,
+        code AS stock_code,
+        LEAD(high, 1) OVER(PARTITION BY code ORDER BY date) AS sell_high1,
+        LEAD(high, 2) OVER(PARTITION BY code ORDER BY date) AS sell_high2,
+        LEAD(high, 3) OVER(PARTITION BY code ORDER BY date) AS sell_high3,
+        LEAD(high, 4) OVER(PARTITION BY code ORDER BY date) AS sell_high4,
+        LEAD(high, 5) OVER(PARTITION BY code ORDER BY date) AS sell_high5,
+        LEAD(high, 6) OVER(PARTITION BY code ORDER BY date) AS sell_high6,
+        LEAD(high, 7) OVER(PARTITION BY code ORDER BY date) AS sell_high7,
+        LEAD(high, 8) OVER(PARTITION BY code ORDER BY date) AS sell_high8,
+        LEAD(high, 9) OVER(PARTITION BY code ORDER BY date) AS sell_high9,
+        LEAD(high, 10) OVER(PARTITION BY code ORDER BY date) AS sell_high10
+    FROM company.krx_stocks_ohlcv
+    -- ★ LEAD 연산을 위해 이 부분은 필터를 걸지 않거나 매우 넉넉하게 잡아야 정확합니다.
+)
+SELECT
+    TO_CHAR(b.date, 'YYYY-MM-DD') AS 매수일,
+    b.stock_name AS 종목명,
+    CONCAT(ROUND((t.sell_high1 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d1_수익률,
+    CONCAT(ROUND((t.sell_high2 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d2_수익률,
+    CONCAT(ROUND((t.sell_high3 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d3_수익률,
+    CONCAT(ROUND((t.sell_high4 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d4_수익률,
+    CONCAT(ROUND((t.sell_high5 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d5_수익률,
+    CONCAT(ROUND((t.sell_high6 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d6_수익률,
+    CONCAT(ROUND((t.sell_high7 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d7_수익률,
+    CONCAT(ROUND((t.sell_high8 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d8_수익률,
+    CONCAT(ROUND((t.sell_high9 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d9_수익률,
+    CONCAT(ROUND((t.sell_high10 - b.close) * 100.0 / NULLIF(b.close, 0), 2), '%') AS d10_수익률
+FROM base b
+LEFT JOIN lead_df t ON b.stock_code = t.stock_code AND b.date = t.date
+WHERE b.date BETWEEN '2026-03-10' AND '2026-03-17' -- ★ 여기에 원하는 기간을 입력하세요
+ORDER BY b.date ;

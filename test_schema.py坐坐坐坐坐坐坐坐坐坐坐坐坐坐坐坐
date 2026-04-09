@@ -1,0 +1,45 @@
+import os, psycopg2, pandas as pd
+
+[os.environ.setdefault(k,v) for line in open('.env') if '=' in line for k,v in [line.strip().split('=',1)]]
+conn = psycopg2.connect(host=os.environ['DB_HOST'], port=os.environ.get('DB_PORT', 5432), dbname=os.environ['DB_NAME'], user=os.environ['DB_USER'], password=os.environ['DB_PASSWORD'])
+
+pd.set_option('display.max_columns', None)
+
+# 업종별 심플 집계를 위한 테스트 쿼리
+query = """
+WITH industry_info AS (
+    SELECT DISTINCT stock_code, wics_name
+    FROM visual.vsl_anly_stocks_price_subindex01
+    WHERE date = (SELECT MAX(date) FROM visual.vsl_anly_stocks_price_subindex01)
+),
+industry_stats AS (
+    SELECT 
+        i.wics_name,
+        AVG(NULLIF(f.per, 0)) as avg_per_3yr,
+        AVG(NULLIF(f.pbr, 0)) as avg_pbr_3yr
+    FROM company.krx_stocks_fundamental_info f
+    JOIN industry_info i ON f.code = i.stock_code
+    WHERE f.date >= CURRENT_DATE - INTERVAL '3 years'
+    GROUP BY i.wics_name
+),
+industry_volume AS (
+    SELECT 
+        wics_name,
+        AVG(CASE WHEN date >= CURRENT_DATE - INTERVAL '1 month' THEN volume ELSE NULL END) as vol_recent_1m,
+        AVG(CASE WHEN date < CURRENT_DATE - INTERVAL '1 month' AND date >= CURRENT_DATE - INTERVAL '3 months' THEN volume ELSE NULL END) as vol_prev_3m
+    FROM visual.vsl_anly_stocks_price_subindex01
+    GROUP BY wics_name
+)
+SELECT 
+    s.wics_name as "업종명",
+    ROUND(s.avg_per_3yr::numeric, 2) as "3년 평균 PER",
+    ROUND((v.vol_recent_1m / NULLIF(v.vol_prev_3m, 0))::numeric, 2) as "거래량 증가비(1M/3M)"
+FROM industry_stats s
+JOIN industry_volume v ON s.wics_name = v.wics_name
+WHERE s.wics_name IS NOT NULL
+ORDER BY "거래량 증가비(1M/3M)" DESC
+LIMIT 10;
+"""
+print("Simplified Industry Ranking Test Results:")
+print(pd.read_sql_query(query, conn))
+conn.close()

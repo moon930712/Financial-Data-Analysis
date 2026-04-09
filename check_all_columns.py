@@ -1,0 +1,50 @@
+import os, psycopg2, pandas as pd
+
+# Load environment variables from .env
+if os.path.exists('.env'):
+    with open('.env') as f:
+        for line in f:
+            if '=' in line:
+                k, v = line.strip().split('=', 1)
+                os.environ[k] = v
+
+conn = psycopg2.connect(
+    host=os.environ['DB_HOST'], 
+    port=os.environ.get('DB_PORT', 5432), 
+    dbname=os.environ['DB_NAME'], 
+    user=os.environ['DB_USER'], 
+    password=os.environ['DB_PASSWORD']
+)
+
+tables = [
+    ('visual', 'vsl_anly_stocks_price_subindex01'),
+    ('company', 'krx_stocks_fundamental_info'),
+    ('company', 'kis_kospi_info'),
+    ('company', 'kis_kosdaq_info'),
+    ('visual', 'vsl_anly_stocks_price_subindex03'),
+    ('llm', 'naver_stock_report')
+]
+
+print("=== Column Audit Report ===\n")
+
+for schema, table in tables:
+    try:
+        q = f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table}' AND table_schema = '{schema}'"
+        cols = pd.read_sql_query(q, conn)
+        print(f"[{schema}.{table}]")
+        print(cols['column_name'].tolist())
+        
+        # Check sample data for first row
+        cur = conn.cursor()
+        cur.execute(f"SELECT * FROM {schema}.{table} LIMIT 1")
+        row = cur.fetchone()
+        if row:
+            # zip columns with row values for clarity
+            col_list = cols['column_name'].tolist()
+            sample_dict = dict(zip(col_list, row))
+            print("Sample Data:", sample_dict)
+        print("-" * 30)
+    except Exception as e:
+        print(f"Error checking {schema}.{table}: {e}")
+
+conn.close()

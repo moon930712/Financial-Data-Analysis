@@ -1,0 +1,140 @@
+WITH bridge AS(
+    SELECT
+        stock_code,
+        reco_date
+    FROM visual.vsl_inv_strat_picks_trend
+    WHERE inv_strat = '2060프로그램매수'
+),
+lead_df AS(
+    SELECT
+        date,
+        code AS stock_code,
+        LEAD(high,1) OVER(PARTITION BY code ORDER BY date) AS sell_high1,
+        LEAD(high,2) OVER(PARTITION BY code ORDER BY date) AS sell_high2,
+        LEAD(high,3) OVER(PARTITION BY code ORDER BY date) AS sell_high3,
+        LEAD(high,4) OVER(PARTITION BY code ORDER BY date) AS sell_high4,
+        LEAD(high,5) OVER(PARTITION BY code ORDER BY date) AS sell_high5,
+        LEAD(high,6) OVER(PARTITION BY code ORDER BY date) AS sell_high6,
+        LEAD(high,7) OVER(PARTITION BY code ORDER BY date) AS sell_high7,
+        LEAD(high,8) OVER(PARTITION BY code ORDER BY date) AS sell_high8,
+        LEAD(high,9) OVER(PARTITION BY code ORDER BY date) AS sell_high9,
+        LEAD(high,10) OVER(PARTITION BY code ORDER BY date) AS sell_high10
+    FROM company.krx_stocks_ohlcv
+),
+histo_base AS(
+    SELECT
+        a.stock_code,
+        a.date,
+        b.macd,
+        b.signal,
+        LAG(b.macd) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag_macd,
+        LAG(b.signal) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag_signal,
+        (b.macd-b.signal) AS histogram,
+        LAG(b.macd-b.signal) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag_histogram,
+        LAG(b.macd-b.signal,2) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag2_histogram,
+        b.rsi
+    FROM visual.vsl_anly_stocks_price_subindex01 a
+    JOIN visual.vsl_anly_stocks_price_subindex02 b
+      ON a.stock_code=b.stock_code
+     AND a.date=b.date
+),
+histo_data AS(
+    SELECT
+        stock_code,
+        date,
+        macd, signal, lag_macd, lag_signal,
+        histogram, lag_histogram, lag2_histogram, rsi,
+        MIN(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 14 PRECEDING AND 1 PRECEDING) AS hist_lowest_14,
+        AVG(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS hist_avg_20,
+        STDDEV(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS hist_std_20,
+        MAX(histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 60 PRECEDING AND 10 PRECEDING) AS max_hist_past
+    FROM histo_base
+),
+base AS(
+    -- 원본 33개 로직 그대로 유지
+    SELECT DISTINCT ON(h.date, h.stock_code)
+        h.date,
+        h.stock_code,
+        p.stock_name,
+        p.close AS buy_close
+    FROM histo_data h
+    JOIN visual.vsl_anly_stocks_price_subindex01 p ON h.stock_code=p.stock_code AND h.date=p.date
+    WHERE EXISTS(
+        SELECT 1
+        FROM bridge b
+        WHERE b.stock_code=h.stock_code
+          AND b.reco_date BETWEEN h.date-INTERVAL '5 day' AND h.date
+    )
+    ORDER BY h.date, h.stock_code
+),
+base_final AS(
+    SELECT
+        b.date,
+        b.stock_code,
+        b.buy_close,
+        h.rsi,
+        h.hist_lowest_14,
+        h.max_hist_past,
+        (h.lag_histogram-h.hist_avg_20)/NULLIF(h.hist_std_20,0) AS z_score,
+        (t.sell_high1-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr1,
+        (t.sell_high2-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr2,
+        (t.sell_high3-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr3,
+        (t.sell_high4-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr4,
+        (t.sell_high5-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr5,
+        (t.sell_high6-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr6,
+        (t.sell_high7-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr7,
+        (t.sell_high8-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr8,
+        (t.sell_high9-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr9,
+        (t.sell_high10-b.buy_close)*100/NULLIF(b.buy_close,0) AS pr10
+    FROM base b
+    LEFT JOIN histo_data h ON b.stock_code=h.stock_code AND b.date=h.date
+    LEFT JOIN lead_df t ON b.stock_code=t.stock_code AND b.date=t.date
+),
+final_agg AS(
+    SELECT 
+        date,
+        COUNT(*) AS item_cnt,
+        -- 전략A 조건 적용 및 D1~D10 데이터 집계
+        ROUND(AVG(pr1),2) AS d1_p, COUNT(*) FILTER(WHERE pr1>0) AS d1_w, COUNT(*) FILTER(WHERE pr1=0) AS d1_d, COUNT(*) FILTER(WHERE pr1<0) AS d1_l,
+        ROUND(AVG(pr2),2) AS d2_p, COUNT(*) FILTER(WHERE pr2>0) AS d2_w, COUNT(*) FILTER(WHERE pr2=0) AS d2_d, COUNT(*) FILTER(WHERE pr2<0) AS d2_l,
+        ROUND(AVG(pr3),2) AS d3_p, COUNT(*) FILTER(WHERE pr3>0) AS d3_w, COUNT(*) FILTER(WHERE pr3=0) AS d3_d, COUNT(*) FILTER(WHERE pr3<0) AS d3_l,
+        ROUND(AVG(pr4),2) AS d4_p, COUNT(*) FILTER(WHERE pr4>0) AS d4_w, COUNT(*) FILTER(WHERE pr4=0) AS d4_d, COUNT(*) FILTER(WHERE pr4<0) AS d4_l,
+        ROUND(AVG(pr5),2) AS d5_p, COUNT(*) FILTER(WHERE pr5>0) AS d5_w, COUNT(*) FILTER(WHERE pr5=0) AS d5_d, COUNT(*) FILTER(WHERE pr5<0) AS d5_l,
+        ROUND(AVG(pr6),2) AS d6_p, COUNT(*) FILTER(WHERE pr6>0) AS d6_w, COUNT(*) FILTER(WHERE pr6=0) AS d6_d, COUNT(*) FILTER(WHERE pr6<0) AS d6_l,
+        ROUND(AVG(pr7),2) AS d7_p, COUNT(*) FILTER(WHERE pr7>0) AS d7_w, COUNT(*) FILTER(WHERE pr7=0) AS d7_d, COUNT(*) FILTER(WHERE pr7<0) AS d7_l,
+        ROUND(AVG(pr8),2) AS d8_p, COUNT(*) FILTER(WHERE pr8>0) AS d8_w, COUNT(*) FILTER(WHERE pr8=0) AS d8_d, COUNT(*) FILTER(WHERE pr8<0) AS d8_l,
+        ROUND(AVG(pr9),2) AS d9_p, COUNT(*) FILTER(WHERE pr9>0) AS d9_w, COUNT(*) FILTER(WHERE pr9=0) AS d9_d, COUNT(*) FILTER(WHERE pr9<0) AS d9_l,
+        ROUND(AVG(pr10),2) AS d10_p, COUNT(*) FILTER(WHERE pr10>0) AS d10_w, COUNT(*) FILTER(WHERE pr10=0) AS d10_d, COUNT(*) FILTER(WHERE pr10<0) AS d10_l
+    FROM base_final
+    WHERE rsi BETWEEN 30 AND 60
+      AND z_score <= -2.0
+      AND max_hist_past > 0
+      AND max_hist_past >= ABS(hist_lowest_14) * 1.2
+    GROUP BY date
+)
+SELECT
+    TO_CHAR(date, 'YYYY-MM-DD') AS 기간,
+    item_cnt AS 종목수,
+    -- D1
+    CONCAT(d1_p, '%') AS d1_수익, CONCAT(ROUND(d1_w*100.0/NULLIF(item_cnt,0),2), '%') AS d1_승률, CONCAT(d1_w,'승-',d1_d,'무-',d1_l,'패') AS d1_승무패,
+    -- D2
+    CONCAT(d2_p, '%') AS d2_수익, CONCAT(ROUND(d2_w*100.0/NULLIF(item_cnt,0),2), '%') AS d2_승률, CONCAT(d2_w,'승-',d2_d,'무-',d2_l,'패') AS d2_승무패,
+    -- D3
+    CONCAT(d3_p, '%') AS d3_수익, CONCAT(ROUND(d3_w*100.0/NULLIF(item_cnt,0),2), '%') AS d3_승률, CONCAT(d3_w,'승-',d3_d,'무-',d3_l,'패') AS d3_승무패,
+    -- D4
+    CONCAT(d4_p, '%') AS d4_수익, CONCAT(ROUND(d4_w*100.0/NULLIF(item_cnt,0),2), '%') AS d4_승률, CONCAT(d4_w,'승-',d4_d,'무-',d4_l,'패') AS d4_승무패,
+    -- D5
+    CONCAT(d5_p, '%') AS d5_수익, CONCAT(ROUND(d5_w*100.0/NULLIF(item_cnt,0),2), '%') AS d5_승률, CONCAT(d5_w,'승-',d5_d,'무-',d5_l,'패') AS d5_승무패,
+    -- D6
+    CONCAT(d6_p, '%') AS d6_수익, CONCAT(ROUND(d6_w*100.0/NULLIF(item_cnt,0),2), '%') AS d6_승률, CONCAT(d6_w,'승-',d6_d,'무-',d6_l,'패') AS d6_승무패,
+    -- D7
+    CONCAT(d7_p, '%') AS d7_수익, CONCAT(ROUND(d7_w*100.0/NULLIF(item_cnt,0),2), '%') AS d7_승률, CONCAT(d7_w,'승-',d7_d,'무-',d7_l,'패') AS d7_승무패,
+    -- D8
+    CONCAT(d8_p, '%') AS d8_수익, CONCAT(ROUND(d8_w*100.0/NULLIF(item_cnt,0),2), '%') AS d8_승률, CONCAT(d8_w,'승-',d8_d,'무-',d8_l,'패') AS d8_승무패,
+    -- D9
+    CONCAT(d9_p, '%') AS d9_수익, CONCAT(ROUND(d9_w*100.0/NULLIF(item_cnt,0),2), '%') AS d9_승률, CONCAT(d9_w,'승-',d9_d,'무-',d9_l,'패') AS d9_승무패,
+    -- D10
+    CONCAT(d10_p, '%') AS d10_수익, CONCAT(ROUND(d10_w*100.0/NULLIF(item_cnt,0),2), '%') AS d10_승률, CONCAT(d10_w,'승-',d10_d,'무-',d10_l,'패') AS d10_승무패
+FROM final_agg
+WHERE date BETWEEN '2026-03-10' AND '2026-03-17'
+ORDER BY 기간;

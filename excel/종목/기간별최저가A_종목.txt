@@ -1,0 +1,88 @@
+WITH signal_list AS(
+	WITH picks AS(
+		SELECT DISTINCT stock_code, reco_date, stock_name
+		FROM visual.vsl_inv_strat_picks_trend
+		WHERE inv_strat='기간별 최저가'
+		AND inv_strat_dtl='60일내 최저가'
+        /* reco_date 고정 조건 제거: 하단 필터에서 통합 관리 */
+	),
+	momentum AS(
+		SELECT
+			m.date,
+			m.stock_code,
+			m.macd-m.signal AS histogram,
+			LAG(m.macd-m.signal,1) OVER(PARTITION BY m.stock_code ORDER BY m.date) AS lag_histogram,
+			LAG(m.macd-m.signal,2) OVER(PARTITION BY m.stock_code ORDER BY m.date) AS lag2_histogram,
+			m.rsi
+		FROM visual.vsl_anly_stocks_price_subindex02 m
+		JOIN (SELECT DISTINCT stock_code FROM picks) p ON m.stock_code=p.stock_code
+	),
+	histo_ext AS(
+		SELECT
+			m.*,
+			MIN(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 14 PRECEDING AND 1 PRECEDING) AS hist_lowest_14,
+			AVG(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS hist_avg_20,
+			STDDEV(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS hist_std_20,
+			MAX(histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 60 PRECEDING AND 10 PRECEDING) AS max_hist_past
+		FROM momentum m
+	),
+	signal AS(
+		SELECT
+			h.date,
+			h.stock_code,
+			(h.lag_histogram-h.hist_avg_20)/NULLIF(h.hist_std_20,0) AS z_score,
+            h.histogram, h.lag_histogram, h.lag2_histogram, h.rsi, h.max_hist_past, h.hist_lowest_14
+		FROM histo_ext h
+		WHERE h.histogram < 0
+		AND h.lag2_histogram > h.lag_histogram
+		AND h.lag_histogram < h.histogram
+		AND h.rsi BETWEEN 30 AND 60
+		AND (h.lag_histogram-h.hist_avg_20)/NULLIF(h.hist_std_20,0) <= -2.0
+		AND h.max_hist_past > 0
+		AND h.max_hist_past >= ABS(h.hist_lowest_14) * 1.2
+	)
+	SELECT DISTINCT ON(s.date, s.stock_code)
+		s.date,
+		s.stock_code,
+        p.stock_name
+	FROM signal s
+	JOIN picks p ON s.stock_code=p.stock_code
+	AND s.date BETWEEN p.reco_date AND p.reco_date + INTERVAL '5 day'
+	WHERE p.stock_name NOT LIKE '%스팩%'
+    /* s.date = '2026-03-10' 고정 필터 제거 */
+	ORDER BY s.date DESC, s.stock_code
+),
+price_lead AS(
+	SELECT
+		code,
+		date,
+		close,
+		LEAD(close,1) OVER(PARTITION BY code ORDER BY date) AS c1,
+		LEAD(close,2) OVER(PARTITION BY code ORDER BY date) AS c2,
+		LEAD(close,3) OVER(PARTITION BY code ORDER BY date) AS c3,
+		LEAD(close,4) OVER(PARTITION BY code ORDER BY date) AS c4,
+		LEAD(close,5) OVER(PARTITION BY code ORDER BY date) AS c5,
+		LEAD(close,6) OVER(PARTITION BY code ORDER BY date) AS c6,
+		LEAD(close,7) OVER(PARTITION BY code ORDER BY date) AS c7,
+		LEAD(close,8) OVER(PARTITION BY code ORDER BY date) AS c8,
+		LEAD(close,9) OVER(PARTITION BY code ORDER BY date) AS c9,
+		LEAD(close,10) OVER(PARTITION BY code ORDER BY date) AS c10
+	FROM company.krx_stocks_ohlcv
+)
+SELECT
+    TO_CHAR(s.date, 'YYYY-MM-DD') AS 날짜,
+    s.stock_name AS 종목명,
+    CONCAT(ROUND((c1-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D1수익률,
+    CONCAT(ROUND((c2-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D2수익률,
+    CONCAT(ROUND((c3-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D3수익률,
+    CONCAT(ROUND((c4-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D4수익률,
+    CONCAT(ROUND((c5-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D5수익률,
+    CONCAT(ROUND((c6-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D6수익률,
+    CONCAT(ROUND((c7-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D7수익률,
+    CONCAT(ROUND((c8-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D8수익률,
+    CONCAT(ROUND((c9-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D9수익률,
+    CONCAT(ROUND((c10-p.close)*100.0/NULLIF(p.close,0), 2), '%') AS D10수익률
+FROM signal_list s
+JOIN price_lead p ON s.stock_code=p.code AND s.date=p.date
+WHERE s.date BETWEEN '2026-03-10' AND '2026-03-17' -- ★ 여기에 원하는 날짜 범위를 입력하세요
+ORDER BY 날짜 ;

@@ -1,0 +1,88 @@
+WITH picks AS(
+    SELECT
+        reco_date,
+        stock_code,
+        stock_name
+    FROM visual.vsl_inv_strat_picks_swing
+    WHERE inv_strat_dtl='징검다리전략대표종목1'
+      AND info2 IS NOT NULL
+      AND reco_date BETWEEN '2026-03-10' AND '2026-03-17' 
+),
+lead_df AS(
+    SELECT
+        o.date,
+        o.code AS stock_code,
+        o.close,
+        LEAD(o.high,1) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high1,
+        LEAD(o.high,2) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high2,
+        LEAD(o.high,3) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high3,
+        LEAD(o.high,4) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high4,
+        LEAD(o.high,5) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high5,
+        LEAD(o.high,6) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high6,
+        LEAD(o.high,7) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high7,
+        LEAD(o.high,8) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high8,
+        LEAD(o.high,9) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high9,
+        LEAD(o.high,10) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high10
+    FROM company.krx_stocks_ohlcv o
+    WHERE o.date >= '2026-03-10'
+),
+base AS(
+    SELECT
+        p.reco_date,
+        p.stock_code,
+        (t.sell_high1-t.close)*100.0/NULLIF(t.close,0) AS pr1,
+        (t.sell_high2-t.close)*100.0/NULLIF(t.close,0) AS pr2,
+        (t.sell_high3-t.close)*100.0/NULLIF(t.close,0) AS pr3,
+        (t.sell_high4-t.close)*100.0/NULLIF(t.close,0) AS pr4,
+        (t.sell_high5-t.close)*100.0/NULLIF(t.close,0) AS pr5,
+        (t.sell_high6-t.close)*100.0/NULLIF(t.close,0) AS pr6,
+        (t.sell_high7-t.close)*100.0/NULLIF(t.close,0) AS pr7,
+        (t.sell_high8-t.close)*100.0/NULLIF(t.close,0) AS pr8,
+        (t.sell_high9-t.close)*100.0/NULLIF(t.close,0) AS pr9, 
+        (t.sell_high10-t.close)*100.0/NULLIF(t.close,0) AS pr10
+    FROM picks p
+    JOIN lead_df t ON p.stock_code=t.stock_code AND p.reco_date=t.date
+),
+agg AS(
+    SELECT
+        reco_date,
+        COUNT(*) AS item_cnt,
+        -- D1~D10 데이터 집계
+        ROUND(AVG(pr1),2) AS d1_p, COUNT(*) FILTER(WHERE pr1>0) AS d1_w, COUNT(*) FILTER(WHERE pr1=0) AS d1_d, COUNT(*) FILTER(WHERE pr1<0) AS d1_l,
+        ROUND(AVG(pr2),2) AS d2_p, COUNT(*) FILTER(WHERE pr2>0) AS d2_w, COUNT(*) FILTER(WHERE pr2=0) AS d2_d, COUNT(*) FILTER(WHERE pr2<0) AS d2_l,
+        ROUND(AVG(pr3),2) AS d3_p, COUNT(*) FILTER(WHERE pr3>0) AS d3_w, COUNT(*) FILTER(WHERE pr3=0) AS d3_d, COUNT(*) FILTER(WHERE pr3<0) AS d3_l,
+        ROUND(AVG(pr4),2) AS d4_p, COUNT(*) FILTER(WHERE pr4>0) AS d4_w, COUNT(*) FILTER(WHERE pr4=0) AS d4_d, COUNT(*) FILTER(WHERE pr4<0) AS d4_l,
+        ROUND(AVG(pr5),2) AS d5_p, COUNT(*) FILTER(WHERE pr5>0) AS d5_w, COUNT(*) FILTER(WHERE pr5=0) AS d5_d, COUNT(*) FILTER(WHERE pr5<0) AS d5_l,
+        ROUND(AVG(pr6),2) AS d6_p, COUNT(*) FILTER(WHERE pr6>0) AS d6_w, COUNT(*) FILTER(WHERE pr6=0) AS d6_d, COUNT(*) FILTER(WHERE pr6<0) AS d6_l,
+        ROUND(AVG(pr7),2) AS d7_p, COUNT(*) FILTER(WHERE pr7>0) AS d7_w, COUNT(*) FILTER(WHERE pr7=0) AS d7_d, COUNT(*) FILTER(WHERE pr7<0) AS d7_l,
+        ROUND(AVG(pr8),2) AS d8_p, COUNT(*) FILTER(WHERE pr8>0) AS d8_w, COUNT(*) FILTER(WHERE pr8=0) AS d8_d, COUNT(*) FILTER(WHERE pr8<0) AS d8_l,
+        ROUND(AVG(pr9),2) AS d9_p, COUNT(*) FILTER(WHERE pr9>0) AS d9_w, COUNT(*) FILTER(WHERE pr9=0) AS d9_d, COUNT(*) FILTER(WHERE pr9<0) AS d9_l,
+        ROUND(AVG(pr10),2) AS d10_p, COUNT(*) FILTER(WHERE pr10>0) AS d10_w, COUNT(*) FILTER(WHERE pr10=0) AS d10_d, COUNT(*) FILTER(WHERE pr10<0) AS d10_l
+    FROM base
+    GROUP BY reco_date
+)
+SELECT
+    TO_CHAR(reco_date, 'YYYY-MM-DD') AS 기간,
+    item_cnt AS 종목수,
+    -- D1
+    CONCAT(d1_p, '%') AS d1_수익, CONCAT(ROUND(d1_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d1_승률, CONCAT(d1_w,'승-',d1_d,'무-',d1_l,'패') AS d1_승무패,
+    -- D2
+    CONCAT(d2_p, '%') AS d2_수익, CONCAT(ROUND(d2_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d2_승률, CONCAT(d2_w,'승-',d2_d,'무-',d2_l,'패') AS d2_승무패,
+    -- D3
+    CONCAT(d3_p, '%') AS d3_수익, CONCAT(ROUND(d3_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d3_승률, CONCAT(d3_w,'승-',d3_d,'무-',d3_l,'패') AS d3_승무패,
+    -- D4
+    CONCAT(d4_p, '%') AS d4_수익, CONCAT(ROUND(d4_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d4_승률, CONCAT(d4_w,'승-',d4_d,'무-',d4_l,'패') AS d4_승무패,
+    -- D5
+    CONCAT(d5_p, '%') AS d5_수익, CONCAT(ROUND(d5_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d5_승률, CONCAT(d5_w,'승-',d5_d,'무-',d5_l,'패') AS d5_승무패,
+    -- D6
+    CONCAT(d6_p, '%') AS d6_수익, CONCAT(ROUND(d6_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d6_승률, CONCAT(d6_w,'승-',d6_d,'무-',d6_l,'패') AS d6_승무패,
+    -- D7
+    CONCAT(d7_p, '%') AS d7_수익, CONCAT(ROUND(d7_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d7_승률, CONCAT(d7_w,'승-',d7_d,'무-',d7_l,'패') AS d7_승무패,
+    -- D8
+    CONCAT(d8_p, '%') AS d8_수익, CONCAT(ROUND(d8_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d8_승률, CONCAT(d8_w,'승-',d8_d,'무-',d8_l,'패') AS d8_승무패,
+    -- D9
+    CONCAT(d9_p, '%') AS d9_수익, CONCAT(ROUND(d9_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d9_승률, CONCAT(d9_w,'승-',d9_d,'무-',d9_l,'패') AS d9_승무패,
+    -- D10
+    CONCAT(d10_p, '%') AS d10_수익, CONCAT(ROUND(d10_w*100.0/NULLIF(item_cnt,0), 2), '%') AS d10_승률, CONCAT(d10_w,'승-',d10_d,'무-',d10_l,'패') AS d10_승무패
+FROM agg
+ORDER BY 기간;

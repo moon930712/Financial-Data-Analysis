@@ -1,0 +1,67 @@
+WITH picks AS(
+	SELECT
+		reco_date,
+		stock_code,
+		stock_name,
+		info1 AS sector_name,
+		info2 AS market_name
+	FROM visual.vsl_inv_strat_picks_swing
+	WHERE inv_strat_dtl='징검다리전략대표종목1'
+		AND info2 IS NOT NULL
+    /* 특정 날짜 조건(reco_date='2026-03-10') 제거 */
+),
+lead_df AS(
+	SELECT
+		o.date,
+		o.code AS stock_code,
+		o.close,
+		LEAD(o.high,1) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high1,
+		LEAD(o.high,2) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high2,
+		LEAD(o.high,3) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high3,
+		LEAD(o.high,4) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high4,
+		LEAD(o.high,5) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high5,
+		LEAD(o.high,6) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high6,
+		LEAD(o.high,7) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high7,
+		LEAD(o.high,8) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high8,
+		LEAD(o.high,9) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high9,
+		LEAD(o.high,10) OVER(PARTITION BY o.code ORDER BY o.date) AS sell_high10
+	FROM company.krx_stocks_ohlcv o
+    /* LEAD 연산을 위해 여기서 날짜를 미리 자르지 않고 JOIN 단계에서 처리합니다 */
+),
+base AS(
+	SELECT
+		p.reco_date,
+		p.stock_name,
+		p.sector_name,
+		p.market_name,
+		ROUND((t.sell_high1-t.close)*100.0/NULLIF(t.close,0), 2) AS pr1,
+		ROUND((t.sell_high2-t.close)*100.0/NULLIF(t.close,0), 2) AS pr2,
+		ROUND((t.sell_high3-t.close)*100.0/NULLIF(t.close,0), 2) AS pr3,
+		ROUND((t.sell_high4-t.close)*100.0/NULLIF(t.close,0), 2) AS pr4,
+		ROUND((t.sell_high5-t.close)*100.0/NULLIF(t.close,0), 2) AS pr5,
+		ROUND((t.sell_high6-t.close)*100.0/NULLIF(t.close,0), 2) AS pr6,
+		ROUND((t.sell_high7-t.close)*100.0/NULLIF(t.close,0), 2) AS pr7,
+		ROUND((t.sell_high8-t.close)*100.0/NULLIF(t.close,0), 2) AS pr8,
+		ROUND((t.sell_high9-t.close)*100.0/NULLIF(t.close,0), 2) AS pr9,
+		ROUND((t.sell_high10-t.close)*100.0/NULLIF(t.close,0), 2) AS pr10
+	FROM picks p
+	INNER JOIN lead_df t
+		ON p.stock_code=t.stock_code
+		AND p.reco_date=t.date
+)
+SELECT
+	TO_CHAR(reco_date, 'YYYY-MM-DD') AS 일자,
+	stock_name AS 종목명,
+	CONCAT(pr1, '%') AS D1수익률,
+	CONCAT(pr2, '%') AS D2수익률,
+	CONCAT(pr3, '%') AS D3수익률,
+	CONCAT(pr4, '%') AS D4수익률,
+	CONCAT(pr5, '%') AS D5수익률,
+	CONCAT(pr6, '%') AS D6수익률,
+	CONCAT(pr7, '%') AS D7수익률,
+	CONCAT(pr8, '%') AS D8수익률,
+	CONCAT(pr9, '%') AS D9수익률,
+	CONCAT(pr10, '%') AS D10수익률
+FROM base
+WHERE reco_date BETWEEN '2026-03-10' AND '2026-03-17' -- ★ 조회할 기간을 여기에 입력하세요
+ORDER BY reco_date;

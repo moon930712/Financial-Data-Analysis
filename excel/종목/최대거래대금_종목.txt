@@ -1,0 +1,143 @@
+WITH bridge AS(
+    SELECT
+        stock_code,
+        reco_date
+    FROM visual.vsl_inv_strat_picks_trend
+    WHERE inv_strat_dtl='종목별 개수(거래대금 300억 이상)'
+),
+lead_df AS(
+    SELECT
+        date,
+        code AS stock_code,
+        LEAD(high,1) OVER(PARTITION BY code ORDER BY date) AS sell_high1,
+        LEAD(high,2) OVER(PARTITION BY code ORDER BY date) AS sell_high2,
+        LEAD(high,3) OVER(PARTITION BY code ORDER BY date) AS sell_high3,
+        LEAD(high,4) OVER(PARTITION BY code ORDER BY date) AS sell_high4,
+        LEAD(high,5) OVER(PARTITION BY code ORDER BY date) AS sell_high5,
+        LEAD(high,6) OVER(PARTITION BY code ORDER BY date) AS sell_high6,
+        LEAD(high,7) OVER(PARTITION BY code ORDER BY date) AS sell_high7,
+        LEAD(high,8) OVER(PARTITION BY code ORDER BY date) AS sell_high8,
+        LEAD(high,9) OVER(PARTITION BY code ORDER BY date) AS sell_high9,
+        LEAD(high,10) OVER(PARTITION BY code ORDER BY date) AS sell_high10
+    FROM company.krx_stocks_ohlcv
+),
+histo_base AS(
+    SELECT
+        a.stock_code,
+        a.date,
+        b.macd,
+        b.signal,
+        LAG(b.macd) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag_macd,
+        LAG(b.signal) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag_signal,
+        (b.macd-b.signal) AS histogram,
+        LAG(b.macd-b.signal) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag_histogram,
+        LAG(b.macd-b.signal,2) OVER(PARTITION BY a.stock_code ORDER BY a.date) AS lag2_histogram,
+        b.rsi
+    FROM visual.vsl_anly_stocks_price_subindex01 a
+    JOIN visual.vsl_anly_stocks_price_subindex02 b
+      ON a.stock_code=b.stock_code
+     AND a.date=b.date
+),
+histo_data AS(
+    SELECT
+        stock_code,
+        date,
+        macd,
+        signal,
+        lag_macd,
+        lag_signal,
+        histogram,
+        lag_histogram,
+        lag2_histogram,
+        rsi,
+        MIN(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 14 PRECEDING AND 1 PRECEDING) AS hist_lowest_14,
+        AVG(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS hist_avg_20,
+        STDDEV(lag_histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) AS hist_std_20,
+        MAX(histogram) OVER(PARTITION BY stock_code ORDER BY date ROWS BETWEEN 60 PRECEDING AND 10 PRECEDING) AS max_hist_past
+    FROM histo_base
+),
+base AS(
+    SELECT DISTINCT ON(h.date,h.stock_code)
+        h.date,
+        h.stock_code,
+        p.stock_name,
+        p.close AS buy_close
+    FROM histo_data h
+    JOIN visual.vsl_anly_stocks_price_subindex01 p
+      ON h.stock_code=p.stock_code
+     AND h.date=p.date
+    WHERE EXISTS(
+        SELECT 1
+        FROM bridge b
+        WHERE b.stock_code=h.stock_code
+          AND b.reco_date BETWEEN h.date-INTERVAL '5 day' AND h.date
+    )
+    ORDER BY h.date,h.stock_code
+),
+base_final AS(
+    SELECT
+        b.date,
+        b.stock_code,
+        b.stock_name,
+        b.buy_close,
+        h.macd,
+        h.signal,
+        h.lag_macd,
+        h.lag_signal,
+        h.histogram,
+        h.lag_histogram,
+        h.lag2_histogram,
+        h.rsi,
+        (h.lag_histogram-h.hist_avg_20)/NULLIF(h.hist_std_20,0) AS z_score,
+        (t.sell_high1-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate1,
+        (t.sell_high2-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate2,
+        (t.sell_high3-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate3,
+        (t.sell_high4-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate4,
+        (t.sell_high5-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate5,
+        (t.sell_high6-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate6,
+        (t.sell_high7-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate7,
+        (t.sell_high8-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate8,
+        (t.sell_high9-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate9,
+        (t.sell_high10-b.buy_close)*100.0/NULLIF(b.buy_close,0) AS profit_rate10
+    FROM base b
+    LEFT JOIN histo_data h ON b.stock_code=h.stock_code AND b.date=h.date
+    LEFT JOIN lead_df t ON b.stock_code=t.stock_code AND b.date=t.date
+),
+final AS(
+    SELECT
+        '눌림' AS entry_type,
+        *
+    FROM base_final
+    WHERE
+        (
+            histogram>0
+            AND lag2_histogram>lag_histogram
+            AND lag_histogram<histogram
+            AND rsi BETWEEN 45 AND 70
+            AND z_score BETWEEN -1.5 AND 0.5
+        )
+        OR
+        (
+            macd>0 AND signal>0
+            AND lag_macd<lag_signal
+            AND macd>signal
+            AND rsi BETWEEN 45 AND 70
+            AND z_score BETWEEN -1.5 AND 1
+        )
+)
+SELECT
+    TO_CHAR(date, 'YYYY-MM-DD') AS 매수일,
+    stock_name AS 종목명,
+    CONCAT(ROUND(profit_rate1, 2), '%') AS d1_수익률,
+    CONCAT(ROUND(profit_rate2, 2), '%') AS d2_수익률,
+    CONCAT(ROUND(profit_rate3, 2), '%') AS d3_수익률,
+    CONCAT(ROUND(profit_rate4, 2), '%') AS d4_수익률,
+    CONCAT(ROUND(profit_rate5, 2), '%') AS d5_수익률,
+    CONCAT(ROUND(profit_rate6, 2), '%') AS d6_수익률,
+    CONCAT(ROUND(profit_rate7, 2), '%') AS d7_수익률,
+    CONCAT(ROUND(profit_rate8, 2), '%') AS d8_수익률,
+    CONCAT(ROUND(profit_rate9, 2), '%') AS d9_수익률,
+    CONCAT(ROUND(profit_rate10, 2), '%') AS d10_수익률
+FROM final
+WHERE date BETWEEN '2026-03-10' AND '2026-03-17' -- ★ 여기에 원하는 날짜 범위를 입력하세요
+ORDER BY date;
