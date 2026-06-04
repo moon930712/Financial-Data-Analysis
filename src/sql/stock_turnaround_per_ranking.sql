@@ -1,5 +1,5 @@
--- [전 업종 가치 턴어라운드 종목 선정 모델]
--- 1. 가치(PBR, DIV) + 2. 수익성(ROE) + 3. 심리(Invest_Senti) + 4. 미래(Report)
+-- [전 업종 PER 기반 턴어라운드 종목 선정 모델]
+-- 1. 가치(PER) + 2. 수익성(ROE) + 3. 수급(Volume) + 4. 리포트(Burst) + 5. 심리(Sentiment)
 
 WITH latest_date AS (
     -- 1. 가장 최신 영업일 추출
@@ -46,11 +46,10 @@ base_data AS (
     LEFT JOIN company.krx_stocks_fundamental_info f ON s1.stock_code = f.code AND s1.date = f.date
     LEFT JOIN (
         SELECT 
-            -- 'F000020' 형식인 경우 숫자만 추출하거나 매칭
             CASE WHEN shortcode LIKE 'F%' THEN SUBSTRING(shortcode, 2) ELSE shortcode END AS stock_code,
             roe,
             'KOSPI' AS market_type
-        FROM company.kis_kospi_info
+        FROM company.kis_kosapi_info
         UNION ALL
         SELECT 
             shortcode AS stock_code, 
@@ -73,10 +72,9 @@ analyst_data AS (
     -- 5. 투자의견 점수화 (최근 1개월 이내 리포트 기준)
     SELECT 
         code AS stock_code,
-        -- 국내 증권가 특성상 'Hold(중립)'도 사실상 매도 의견으로 취급하여 1(위험)로 필터링
         MAX(CASE 
             WHEN inv_opi IN ('시장평균', 'Hold', '중립', 'MarketPerform', '투자의견없음', '없음', 'Neutral',
-            				 '매도', 'Sell', 'UnderPerform', 'MarketUnderPerform', '시장수익률하회', '비중축소', 'Reduce') THEN 1 
+                             '매도', 'Sell', 'UnderPerform', 'MarketUnderPerform', '시장수익률하회', '비중축소', 'Reduce') THEN 1 
             ELSE 0 
         END) AS has_sell_opinion
     FROM llm.naver_stock_report
@@ -98,14 +96,13 @@ final_scoring AS (
     SELECT 
         *,
         (PERCENT_RANK() OVER (ORDER BY roe ASC)) * 100 AS roe_rank_score,
-    --    (PERCENT_RANK() OVER (ORDER BY pbr DESC)) * 100 AS pbr_rank_score, -- 낮은게 좋으므로 역순 (주석 처리)
         (PERCENT_RANK() OVER (ORDER BY invest_senti ASC)) * 100 AS senti_rank_score,
         (PERCENT_RANK() OVER (ORDER BY vol_momentum ASC)) * 100 AS vol_rank_score,
         (PERCENT_RANK() OVER (ORDER BY report_count ASC)) * 100 AS report_rank_score,
-        (PERCENT_RANK() OVER (PARTITION BY wics_name ORDER BY pbr DESC)) * 100 AS industry_rel_pbr_score
+        -- 업종 내 상대 PER 점수: 적자 기업(per<=0)은 0점에 수렴하도록 처리
+        (PERCENT_RANK() OVER (PARTITION BY wics_name ORDER BY (CASE WHEN per > 0 THEN per ELSE 999999 END) DESC)) * 100 AS industry_rel_per_score
     FROM scoring_base
-    WHERE pbr > 0 AND pbr < 10 -- 이상치 제거
-      AND has_sell_opinion != 1 -- 매도 의견이 있는 종목만 제외 (리포트 없는 소외주도 포함)
+    WHERE has_sell_opinion != 1 -- 매도 의견 종목 제외
 )
 -- 8. 최종 랭킹 산출
 SELECT 
@@ -114,18 +111,13 @@ SELECT
     stock_code AS "종목코드",
     market_type AS "시장구분",
     stock_name AS "종목명",
-    ROW_NUMBER() OVER(PARTITION BY wics_name ORDER BY pbr ASC, per ASC) AS "업종내_가치순위",
-    /*
-    pbr AS "PBR",
+    per AS "PER",
     roe AS "ROE",
-    invest_senti AS "투자심리",
-    ROUND(vol_momentum::numeric, 2) AS "거래량모멘텀",
     report_count AS "리포트수",
-    */
-    -- 가중치 합산 (가치 20% + 수익성 20% + 수급 30% + 심리 10% + 리포트 20%)
+    -- 사용자 확정 가중치 (가치 20% + 수익성 20% + 수급 30% + 심리 10% + 리포트 20%)
     ROUND(
         (
-            (industry_rel_pbr_score * 0.2) + -- 가치 (20%)
+            (industry_rel_per_score * 0.2) + -- 가치 (20%)
             (roe_rank_score * 0.2) +          -- 수익성 (20%)
             (vol_rank_score * 0.3) +          -- 수급 (30%)
             (senti_rank_score * 0.1) +         -- 심리 (10%)
@@ -133,6 +125,6 @@ SELECT
         )::numeric
     , 2) AS "최종 턴어라운드 점수"
 FROM final_scoring
-where 1=1 
-	and wics_name IN ($wics_name)
+WHERE 1=1 
+    AND wics_name IN ($wics_name)
 ORDER BY "최종 턴어라운드 점수" DESC;

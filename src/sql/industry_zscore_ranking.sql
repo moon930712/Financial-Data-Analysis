@@ -1,100 +1,58 @@
--- =====================================================================
--- 퀀트 스크리닝 및 업종별 다중 요인(Multi-Factor) Z-Score 통합 랭킹 모델 (심플 업종 중심 버전)
--- 작성 목적: 복잡한 개별 종목 지표 대신 업종 전체의 과거 3년 평균 데이터와 
---            최근 1개월 수급(거래량) 모멘텀을 결합한 가볍고 강력한 랭킹 시스템
--- =====================================================================
-
-WITH latest_date AS (
-    -- 1. 가장 최근 영업일 추출 (하나의 기준으로 통일)
-    SELECT MAX(date) AS max_d 
-    FROM visual.vsl_anly_stocks_price_subindex01
-),
-industry_mapping AS (
-    -- 2. 최신 기준의 종목별 WICS 업종 및 ROE 정보 매핑
+WITH industry_data AS (
+    -- 1. 업종별 최신 PBR 및 ROE 정보 취합 (가격 테이블에서도 최신 날짜만 필터링)
     SELECT 
-        v.stock_code, 
-        COALESCE(v.wics_name, '기타') AS industry,
-        -- ROE 문자열 캐스팅 오류 방지
-        COALESCE(NULLIF(trim(ci.roe::text), ''), '-5.0')::numeric AS roe
-    FROM visual.vsl_anly_stocks_price_subindex01 v
+        ib.wics_name
+        , ib.stock_code
+        , rb.roe
+        , fb.pbr
+    FROM visual.vsl_anly_stocks_price_subindex01 ib
     JOIN (
-        SELECT shortcode AS stock_code, roe FROM company.kis_kospi_info
+        SELECT koreanname , roe FROM company.kis_kospi_info
         UNION ALL
-        SELECT shortcode AS stock_code, roe FROM company.kis_kosdaq_info
-    ) ci ON v.stock_code = ci.stock_code
-    WHERE v.date = (SELECT max_d FROM latest_date)
+        SELECT koreanname , roe FROM company.kis_kosdaq_info
+    ) rb ON ib.stock_name = rb.koreanname
+    LEFT JOIN company.krx_stocks_fundamental_info fb ON ib.stock_code = fb.code
+    WHERE fb.date = (SELECT MAX(date) FROM company.krx_stocks_fundamental_info)
+      AND ib.date = fb.date -- ★ 가격 데이터도 동일한 최신 날짜로 일치시킴 (중복 방지)
+      AND rb.roe IS NOT NULL AND rb.roe > 0 -- 이익이 나는 기업만 대상 (가치 함정 방지)
 ),
-industry_historical_stats AS (
-    -- 3. 업종별 과거 1년 평균 PBR 및 ROE 집계
+sector_stats AS (
+    -- 2. 업종별 중앙값 및 정확한 종목 수 요약
     SELECT 
-        m.industry,
-        AVG(NULLIF(f.pbr, 0)) AS avg_pbr_1yr,
-        AVG(m.roe) AS sector_avg_roe
-    FROM company.krx_stocks_fundamental_info f
-    JOIN industry_mapping m ON f.code = m.stock_code
-    WHERE f.date >= (SELECT max_d FROM latest_date) - INTERVAL '1 year'
-    GROUP BY m.industry
-),
-industry_current_stats AS (
-    -- 4. 업종별 최근 1개월 평균 PBR 집계 및 종목 수 필터링
-    SELECT 
-        m.industry,
-        COUNT(DISTINCT m.stock_code) AS stock_count,
-        AVG(NULLIF(f.pbr, 0)) AS avg_pbr_1m
-    FROM company.krx_stocks_fundamental_info f
-    JOIN industry_mapping m ON f.code = m.stock_code
-    WHERE f.date >= (SELECT max_d FROM latest_date) - INTERVAL '1 month'
-    GROUP BY m.industry
-    HAVING COUNT(DISTINCT m.stock_code) >= 5
-),
-industry_volume_momentum AS (
-    -- 5. 최근 1개월 vs 이전 3개월 평균 거래량 비교
-    SELECT 
-        wics_name AS industry,
-        AVG(CASE WHEN date >= (SELECT max_d FROM latest_date) - INTERVAL '1 month' THEN volume ELSE NULL END) AS vol_recent_1m,
-        AVG(CASE WHEN date < (SELECT max_d FROM latest_date) - INTERVAL '1 month' 
-                 AND date >= (SELECT max_d FROM latest_date) - INTERVAL '4 months' THEN volume ELSE NULL END) AS vol_prev_3m
-    FROM visual.vsl_anly_stocks_price_subindex01
+        wics_name
+        , PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY roe) as median_roe
+        , AVG(pbr) as avg_pbr
+        , COUNT(DISTINCT stock_code) as stock_count -- ★ 중복 없는 종목 수 계산
+    FROM industry_data
     GROUP BY wics_name
 ),
-industry_metrics AS (
-    -- 6. 핵심 지표 결합
+pbr_history AS (
+    -- 3. 최근 1년 업종별 PBR 밴드 (최고/최저) 계산
     SELECT 
-        c.industry,
-        c.stock_count,
-        h.sector_avg_roe as avg_roe,
-        COALESCE(c.avg_pbr_1m / NULLIF(h.avg_pbr_1yr, 0), 1.0) AS pbr_discount_ratio,
-        COALESCE(v.vol_recent_1m / NULLIF(v.vol_prev_3m, 0), 1.0) AS volume_growth_ratio
-    FROM industry_current_stats c
-    JOIN industry_historical_stats h ON c.industry = h.industry
-    JOIN industry_volume_momentum v ON c.industry = v.industry
-),
-zscore_calculation AS (
-    -- 7. 표준점수(Z-Score) 산출
-    SELECT 
-        industry,
-        stock_count,
-        avg_roe,
-        pbr_discount_ratio,
-        volume_growth_ratio,
-        COALESCE((avg_roe - AVG(avg_roe) OVER()) / NULLIF(STDDEV_POP(avg_roe) OVER(), 0), 0) AS z_fundamental,
-        COALESCE(((pbr_discount_ratio - AVG(pbr_discount_ratio) OVER()) / NULLIF(STDDEV_POP(pbr_discount_ratio) OVER(), 0)) * -1, 0) AS z_value,
-        COALESCE((volume_growth_ratio - AVG(volume_growth_ratio) OVER()) / NULLIF(STDDEV_POP(volume_growth_ratio) OVER(), 0), 0) AS z_momentum
-    FROM industry_metrics
+        ib.wics_name
+        , MIN(fb.pbr) as pbr_min
+        , MAX(fb.pbr) as pbr_max
+    FROM visual.vsl_anly_stocks_price_subindex01 ib
+    JOIN company.krx_stocks_fundamental_info fb ON ib.stock_code = fb.code
+    WHERE fb.date >= (CURRENT_DATE - INTERVAL '1 year')
+      AND ib.date = fb.date -- ★ 과거 데이터에서도 일치시킴
+    GROUP BY ib.wics_name
 )
--- 8. 종합 순위 공개
+-- 4. 최종 결과: 가성비(Efficiency) 순위 도출
 SELECT 
-    ROW_NUMBER() OVER(ORDER BY ((z_momentum * 0.4) + (z_value * 0.3) + (z_fundamental * 0.3)) DESC) AS "종합 순위(Rank)",
-    industry AS "업종명(WICS)",
-/*
-    ROUND(((z_momentum * 0.5) + (z_value * 0.2) + (z_fundamental * 0.3))::numeric, 2) AS "통합 Z-Score",
-    ROUND(z_momentum::numeric, 2) AS "Z-Score (수급 활력)",
-    ROUND(z_value::numeric, 2) AS "Z-Score (수치적 저평가)",
-    ROUND(z_fundamental::numeric, 2) AS "Z-Score (기초 수익성)",
-    stock_count AS "소속 종목 수",
-    ROUND(avg_roe::numeric, 2) AS "업종 평균 ROE",
-    ROUND(pbr_discount_ratio::numeric, 2) AS "1년 평균 대비 1개월 PBR 비율",
-*/
-    ROUND(volume_growth_ratio::numeric, 2) AS "최근 1개월 거래량 증가율"
-FROM zscore_calculation
-ORDER BY "종합 순위(Rank)";
+    ROW_NUMBER() OVER(ORDER BY (s.avg_pbr / NULLIF(s.median_roe, 0)) ASC) AS "순위"
+    , s.wics_name AS "업종명(WICS)"
+    , ROUND(s.median_roe::numeric, 2) as "ROE(중앙값)"
+    , ROUND(s.avg_pbr::numeric, 2) as "현재 PBR"
+    -- ROE 1%당 지불하는 PBR (낮을수록 가성비 좋음)
+    , ROUND((s.avg_pbr / NULLIF(s.median_roe, 0))::numeric, 4) as "PBR_per_ROE"
+    -- 최근 1년 고점/저점 대비 현재 위치 (%)
+    , ROUND(((s.avg_pbr - h.pbr_min) / NULLIF(h.pbr_max - h.pbr_min, 0) * 100)::numeric, 1) as "밴드_현재위치(%)"
+    , s.stock_count as "종목수"
+FROM sector_stats s
+JOIN pbr_history h ON s.wics_name = h.wics_name
+WHERE 1=1
+  AND s.median_roe > 0
+--  and s.wics_name IN ($wics_name)
+  AND s.stock_count > 5 -- ★ 종목수 5개 초과 업종만 반영 (사용자 요청 사항)
+ORDER BY "PBR_per_ROE" ASC; -- 가성비가 좋은(ROE 대비 PBR이 싼) 순서로 정렬
