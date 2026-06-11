@@ -1,0 +1,10 @@
+--- Removed Stocks (Close >= Open * 1.10) ---
+Date: 2026-03-05 | Stock: ½ÎÀÌ¸Æ½º | Open: 20700.0 | Close: 22800.0 | Rose: 10.14%
+Date: 2026-03-09 | Stock: ÅÂ±¤ | Open: 25400.0 | Close: 29200.0 | Rose: 14.96%
+Date: 2026-03-09 | Stock: ÇÑ±¹Ä«º» | Open: 40500.0 | Close: 44750.0 | Rose: 10.49%
+Date: 2026-03-13 | Stock: GS°Ç¼³ | Open: 20650.0 | Close: 23000.0 | Rose: 11.38%
+Date: 2026-03-25 | Stock: ½ÅÈï¿¡½ºÀÌ¾¾ | Open: 6500.0 | Close: 7210.0 | Rose: 10.92%
+Date: 2026-03-25 | Stock: ¿£ÄÍ | Open: 34650.0 | Close: 38900.0 | Rose: 12.27%
+Date: 2026-05-22 | Stock: ¿¹½ºÆ¼ | Open: 26300.0 | Close: 30100.0 | Rose: 14.45%
+Date: 2026-06-04 | Stock: µ¿Áø½ê¹ÌÄÍ | Open: 53100.0 | Close: 59700.0 | Rose: 12.43%
+Total 8 stocks removed.

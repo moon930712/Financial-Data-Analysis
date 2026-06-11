@@ -1,0 +1,37 @@
+=== Losers (D+5 < 0) Characteristics ===
+Count: 87
+Top Themes:
+Theme
+건설             8
+전력저장장치(ESS)    6
+전기차            5
+바이오            5
+지방코스닥기업        5
+Name: count, dtype: int64
+Top Patterns:
+Pattern
+4등급 -> 2등급 -> 2등급    53
+4등급 -> 3등급 -> 1등급    22
+6등급 -> 4등급 -> 1등급    12
+Name: count, dtype: int64
+Avg RSI: 72.95
+Avg 20MA Disparity: 126.75%
+
+=== Winners (D+5 > 0) Characteristics ===
+Count: 87
+Top Themes:
+Theme
+증권             7
+전력저장장치(ESS)    7
+통신장비           5
+지방코스닥기업        4
+2차전지           4
+Name: count, dtype: int64
+Top Patterns:
+Pattern
+4등급 -> 2등급 -> 2등급    38
+4등급 -> 3등급 -> 1등급    28
+6등급 -> 4등급 -> 1등급    21
+Name: count, dtype: int64
+Avg RSI: 69.48
+Avg 20MA Disparity: 116.95%
